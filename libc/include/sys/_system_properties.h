@@ -41,6 +41,7 @@ typedef struct prop_msg prop_msg;
 #define PROP_AREA_VERSION 0x45434f76
 
 #define PROP_SERVICE_NAME "property_service"
+#define PROP_FILENAME "/dev/__properties__"
 
 /* #define PROP_MAX_ENTRIES 247 */
 /* 247 -> 32620 bytes (<32768) */
@@ -103,6 +104,7 @@ struct prop_msg
 #define PROP_PATH_SYSTEM_BUILD     "/system/build.prop"
 #define PROP_PATH_SYSTEM_DEFAULT   "/system/default.prop"
 #define PROP_PATH_LOCAL_OVERRIDE   "/data/local.prop"
+#define PROP_PATH_FACTORY          "/factory/factory.prop"
 
 #endif
 #endif

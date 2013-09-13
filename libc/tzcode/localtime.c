@@ -37,12 +37,6 @@ static char elsieid[] = "@(#)localtime.c    8.3";
 #define TZ_ABBR_ERR_CHAR    '_'
 #endif /* !defined TZ_ABBR_ERR_CHAR */
 
-#define INDEXFILE "/system/usr/share/zoneinfo/zoneinfo.idx"
-#define DATAFILE "/system/usr/share/zoneinfo/zoneinfo.dat"
-#define NAMELEN 40
-#define INTLEN 4
-#define READLEN (NAMELEN + 3 * INTLEN)
-
 /*
 ** SunOS 4.1.1 headers lack O_BINARY.
 */
@@ -205,6 +199,7 @@ struct rule {
 
 /* NOTE: all internal functions assume that _tzLock() was already called */
 
+static int __bionic_open_tzdata(const char*, int*);
 static long     detzcode P((const char * codep));
 static time_t   detzcode64 P((const char * codep));
 static int      differ_by_repeat P((time_t t1, time_t t0));
@@ -217,9 +212,9 @@ static const char * getoffset P((const char * strp, long * offsetp));
 static const char * getrule P((const char * strp, struct rule * rulep));
 static void     gmtload P((struct state * sp));
 static struct tm *  gmtsub P((const time_t * timep, long offset,
-                struct tm * tmp));
+                struct tm * tmp, const struct state * sp)); // android-changed: added sp.
 static struct tm *  localsub P((const time_t * timep, long offset,
-                struct tm * tmp));
+                struct tm * tmp, const struct state * sp)); // android-changed: added sp.
 static int      increment_overflow P((int * number, int delta));
 static int      leaps_thru_end_of P((int y));
 static int      long_increment_overflow P((long * number, int delta));
@@ -230,16 +225,16 @@ static int      normalize_overflow P((int * tensptr, int * unitsptr,
 static void     settzname P((void));
 static time_t       time1 P((struct tm * tmp,
                 struct tm * (*funcp) P((const time_t *,
-                long, struct tm *)),
-                long offset));
+                long, struct tm *, const struct state *)), // android-changed: added state*.
+                long offset, const struct state * sp)); // android-changed: added sp.
 static time_t       time2 P((struct tm *tmp,
                 struct tm * (*funcp) P((const time_t *,
-                long, struct tm*)),
-                long offset, int * okayp));
+                long, struct tm*, const struct state *)), // android-changed: added state*.
+                long offset, int * okayp, const struct state * sp)); // android-changed: added sp.
 static time_t       time2sub P((struct tm *tmp,
                 struct tm * (*funcp) P((const time_t *,
-                long, struct tm*)),
-                long offset, int * okayp, int do_norm_secs));
+                long, struct tm*, const struct state *)), // android-changed: added state*.
+                long offset, int * okayp, int do_norm_secs, const struct state * sp)); // android-change: added sp.
 static struct tm *  timesub P((const time_t * timep, long offset,
                 const struct state * sp, struct tm * tmp));
 static int      tmcomp P((const struct tm * atmp,
@@ -409,10 +404,7 @@ static int toint(unsigned char *s) {
 }
 
 static int
-tzload(name, sp, doextend)
-register const char *       name;
-register struct state * const   sp;
-register const int      doextend;
+tzload(const char* name, struct state* const sp, const int doextend)
 {
     register const char *       p;
     register int            i;
@@ -470,44 +462,8 @@ register const int      doextend;
             return -1;
         }
         if ((fid = open(name, OPEN_MODE)) == -1) {
-            char buf[READLEN];
-            char name[NAMELEN + 1];
-            int fidix = open(INDEXFILE, OPEN_MODE);
-            int off = -1;
-
-            XLOG(( "tzload: could not open '%s', trying '%s'\n", fullname, INDEXFILE ));
-            if (fidix < 0) {
-                XLOG(( "tzload: could not find '%s'\n", INDEXFILE ));
-                return -1;
-            }
-
-            while (read(fidix, buf, sizeof(buf)) == sizeof(buf)) {
-                memcpy(name, buf, NAMELEN);
-                name[NAMELEN] = '\0';
-
-                if (strcmp(name, origname) == 0) {
-                    off = toint((unsigned char *) buf + NAMELEN);
-                    toread = toint((unsigned char *) buf + NAMELEN + INTLEN);
-                    break;
-                }
-            }
-
-            close(fidix);
-
-            if (off < 0) {
-                XLOG(( "tzload: invalid offset (%d)\n", off ));
-                return -1;
-            }
-
-            fid = open(DATAFILE, OPEN_MODE);
-
+            fid = __bionic_open_tzdata(origname, &toread);
             if (fid < 0) {
-                XLOG(( "tzload: could not open '%s'\n", DATAFILE ));
-                return -1;
-            }
-
-            if (lseek(fid, off, SEEK_SET) < 0) {
-                XLOG(( "tzload: could not seek to %d in '%s'\n", off, DATAFILE ));
                 return -1;
             }
         }
@@ -1331,21 +1287,25 @@ tzset P((void))
 
 /*ARGSUSED*/
 static struct tm *
-localsub(timep, offset, tmp)
+localsub(timep, offset, tmp, sp) // android-changed: added sp.
 const time_t * const    timep;
 const long      offset;
 struct tm * const   tmp;
+const struct state * sp; // android-added: added sp.
 {
-    register struct state *     sp;
     register const struct ttinfo *  ttisp;
     register int            i;
     register struct tm *        result;
     const time_t            t = *timep;
 
-    sp = lclptr;
+    // BEGIN android-changed: support user-supplied sp.
+    if (sp == NULL) {
+        sp = lclptr;
+    }
+    // END android-changed
 #ifdef ALL_STATE
     if (sp == NULL)
-        return gmtsub(timep, offset, tmp);
+        return gmtsub(timep, offset, tmp, sp); // android-changed: added sp.
 #endif /* defined ALL_STATE */
     if ((sp->goback && t < sp->ats[0]) ||
         (sp->goahead && t > sp->ats[sp->timecnt - 1])) {
@@ -1372,7 +1332,7 @@ struct tm * const   tmp;
             if (newt < sp->ats[0] ||
                 newt > sp->ats[sp->timecnt - 1])
                     return NULL;    /* "cannot happen" */
-            result = localsub(&newt, offset, tmp);
+            result = localsub(&newt, offset, tmp, sp); // android-changed: added sp.
             if (result == tmp) {
                 register time_t newy;
 
@@ -1442,7 +1402,7 @@ struct tm *     tmp;
 
     _tzLock();
     tzset_locked();
-    result = localsub(timep, 0L, tmp);
+    result = localsub(timep, 0L, tmp, NULL); // android-changed: extra parameter.
     _tzUnlock();
 
     return result;
@@ -1453,12 +1413,15 @@ struct tm *     tmp;
 */
 
 static struct tm *
-gmtsub(timep, offset, tmp)
+gmtsub(timep, offset, tmp, sp) // android-changed: added sp.
 const time_t * const    timep;
 const long      offset;
 struct tm * const   tmp;
+const struct state * sp; // android-changed: added sp.
 {
     register struct tm *    result;
+
+    (void) sp; // android-added: unused.
 
     if (!gmt_is_set) {
         gmt_is_set = TRUE;
@@ -1510,7 +1473,7 @@ struct tm *     tmp;
     struct tm*  result;
 
     _tzLock();
-    result = gmtsub(timep, 0L, tmp);
+    result = gmtsub(timep, 0L, tmp, NULL); // android-changed: extra parameter.
     _tzUnlock();
 
     return result;
@@ -1523,7 +1486,7 @@ offtime(timep, offset)
 const time_t * const    timep;
 const long      offset;
 {
-    return gmtsub(timep, offset, &tmGlobal);
+    return gmtsub(timep, offset, &tmGlobal, NULL); // android-changed: extra parameter.
 }
 #endif /* 0 */
 #endif /* defined STD_INSPIRED */
@@ -1796,14 +1759,14 @@ register const struct tm * const btmp;
 }
 
 static time_t
-time2sub(tmp, funcp, offset, okayp, do_norm_secs)
+time2sub(tmp, funcp, offset, okayp, do_norm_secs, sp) // android-changed: added sp
 struct tm * const   tmp;
-struct tm * (* const    funcp) P((const time_t*, long, struct tm*));
+struct tm * (* const    funcp) P((const time_t*, long, struct tm*, const struct state*)); // android-changed: added state*
 const long      offset;
 int * const     okayp;
 const int       do_norm_secs;
+const struct state * sp; // android-changed: added sp
 {
-    register const struct state *   sp;
     register int            dir;
     register int            i, j;
     register int            saved_seconds;
@@ -1905,7 +1868,7 @@ const int       do_norm_secs;
             t = lo;
         else if (t > hi)
             t = hi;
-        if ((*funcp)(&t, offset, &mytm) == NULL) {
+        if ((*funcp)(&t, offset, &mytm, sp) == NULL) { // android-changed: added sp.
             /*
             ** Assume that t is too extreme to be represented in
             ** a struct tm; arrange things so that it is less
@@ -1943,9 +1906,13 @@ const int       do_norm_secs;
         /*
         ** The (void *) casts are the benefit of SunOS 3.3 on Sun 2's.
         */
-        sp = (const struct state *)
-            (((void *) funcp == (void *) localsub) ?
-            lclptr : gmtptr);
+        // BEGIN android-changed: support user-supplied sp
+        if (sp == NULL) {
+            sp = (const struct state *)
+                (((void *) funcp == (void *) localsub) ?
+                lclptr : gmtptr);
+        }
+        // END android-changed
 #ifdef ALL_STATE
         if (sp == NULL)
             return WRONG;
@@ -1958,7 +1925,7 @@ const int       do_norm_secs;
                     continue;
                 newt = t + sp->ttis[j].tt_gmtoff -
                     sp->ttis[i].tt_gmtoff;
-                if ((*funcp)(&newt, offset, &mytm) == NULL)
+                if ((*funcp)(&newt, offset, &mytm, sp) == NULL) // android-changed: added sp.
                     continue;
                 if (tmcomp(&mytm, &yourtm) != 0)
                     continue;
@@ -1978,17 +1945,19 @@ label:
     if ((newt < t) != (saved_seconds < 0))
         return WRONG;
     t = newt;
-    if ((*funcp)(&t, offset, tmp))
+    if ((*funcp)(&t, offset, tmp, sp)) // android-changed: added sp.
         *okayp = TRUE;
     return t;
 }
 
+// BEGIN android-changed: added sp.
 static time_t
-time2(tmp, funcp, offset, okayp)
+time2(tmp, funcp, offset, okayp, sp)
 struct tm * const   tmp;
-struct tm * (* const    funcp) P((const time_t*, long, struct tm*));
+struct tm * (* const    funcp) P((const time_t*, long, struct tm*, const struct state*));
 const long      offset;
 int * const     okayp;
+const struct state * sp;
 {
     time_t  t;
 
@@ -1997,18 +1966,19 @@ int * const     okayp;
     ** (in case tm_sec contains a value associated with a leap second).
     ** If that fails, try with normalization of seconds.
     */
-    t = time2sub(tmp, funcp, offset, okayp, FALSE);
-    return *okayp ? t : time2sub(tmp, funcp, offset, okayp, TRUE);
+    t = time2sub(tmp, funcp, offset, okayp, FALSE, sp);
+    return *okayp ? t : time2sub(tmp, funcp, offset, okayp, TRUE, sp);
 }
+// END android-changed
 
 static time_t
-time1(tmp, funcp, offset)
+time1(tmp, funcp, offset, sp) // android-changed: added sp.
 struct tm * const   tmp;
-struct tm * (* const    funcp) P((const time_t *, long, struct tm *));
+struct tm * (* const    funcp) P((const time_t *, long, struct tm *, const struct state *));
 const long      offset;
+const struct state * sp; // android-changed: added sp.
 {
     register time_t         t;
-    register const struct state *   sp;
     register int            samei, otheri;
     register int            sameind, otherind;
     register int            i;
@@ -2019,7 +1989,7 @@ const long      offset;
 
     if (tmp->tm_isdst > 1)
         tmp->tm_isdst = 1;
-    t = time2(tmp, funcp, offset, &okay);
+    t = time2(tmp, funcp, offset, &okay, sp); // android-changed: added sp.
 #ifdef PCTS
     /*
     ** PCTS code courtesy Grant Sullivan.
@@ -2042,8 +2012,12 @@ const long      offset;
     /*
     ** The (void *) casts are the benefit of SunOS 3.3 on Sun 2's.
     */
-    sp = (const struct state *) (((void *) funcp == (void *) localsub) ?
-        lclptr : gmtptr);
+    // BEGIN android-changed: support user-supplied sp.
+    if (sp == NULL) {
+        sp = (const struct state *) (((void *) funcp == (void *) localsub) ?
+            lclptr : gmtptr);
+    }
+    // BEGIN android-changed
 #ifdef ALL_STATE
     if (sp == NULL)
         return WRONG;
@@ -2067,7 +2041,7 @@ const long      offset;
             tmp->tm_sec += sp->ttis[otheri].tt_gmtoff -
                     sp->ttis[samei].tt_gmtoff;
             tmp->tm_isdst = !tmp->tm_isdst;
-            t = time2(tmp, funcp, offset, &okay);
+            t = time2(tmp, funcp, offset, &okay, sp); // android-changed: added sp.
             if (okay)
                 return t;
             tmp->tm_sec -= sp->ttis[otheri].tt_gmtoff -
@@ -2085,10 +2059,62 @@ struct tm * const   tmp;
     time_t  result;
     _tzLock();
     tzset_locked();
-    result = time1(tmp, localsub, 0L);
+    result = time1(tmp, localsub, 0L, NULL); // android-changed: extra parameter.
     _tzUnlock();
     return result;
 }
+
+// BEGIN android-added
+
+// Caches the most recent timezone (http://b/8270865).
+static int __bionic_tzload_cached(const char* name, struct state* const sp, const int doextend) {
+  _tzLock();
+
+  // Our single-item cache.
+  static char* gCachedTimeZoneName;
+  static struct state gCachedTimeZone;
+
+  // Do we already have this timezone cached?
+  if (gCachedTimeZoneName != NULL && strcmp(name, gCachedTimeZoneName) == 0) {
+    *sp = gCachedTimeZone;
+    _tzUnlock();
+    return 0;
+  }
+
+  // Can we load it?
+  int rc = tzload(name, sp, doextend);
+  if (rc == 0) {
+    // Update the cache.
+    free(gCachedTimeZoneName);
+    gCachedTimeZoneName = strdup(name);
+    gCachedTimeZone = *sp;
+  }
+
+  _tzUnlock();
+  return rc;
+}
+
+// Non-standard API: mktime(3) but with an explicit timezone parameter.
+time_t mktime_tz(struct tm* const tmp, const char* tz) {
+  struct state st;
+  if (__bionic_tzload_cached(tz, &st, TRUE) != 0) {
+    // TODO: not sure what's best here, but for now, we fall back to gmt.
+    gmtload(&st);
+  }
+  return time1(tmp, localsub, 0L, &st);
+}
+
+// Non-standard API: localtime(3) but with an explicit timezone parameter.
+void localtime_tz(const time_t* const timep, struct tm* tmp, const char* tz) {
+  struct state st;
+  if (__bionic_tzload_cached(tz, &st, TRUE) != 0) {
+    // TODO: not sure what's best here, but for now, we fall back to gmt.
+    gmtload(&st);
+  }
+  localsub(timep, 0L, tmp, &st);
+}
+
+// END android-added
 
 #ifdef STD_INSPIRED
 
@@ -2108,7 +2134,7 @@ struct tm * const   tmp;
 
     tmp->tm_isdst = 0;
     _tzLock();
-    result = time1(tmp, gmtsub, 0L);
+    result = time1(tmp, gmtsub, 0L, NULL); // android-changed: extra parameter.
     _tzUnlock();
 
     return result;
@@ -2124,7 +2150,7 @@ const long      offset;
 
     tmp->tm_isdst = 0;
     _tzLock();
-    result = time1(tmp, gmtsub, offset);
+    result = time1(tmp, gmtsub, offset, NULL); // android-changed: extra parameter.
     _tzUnlock();
 
     return result;
@@ -2228,3 +2254,100 @@ time_t  t;
 }
 
 #endif /* defined STD_INSPIRED */
+
+#include <assert.h>
+#include <stdint.h>
+#include <arpa/inet.h> // For ntohl(3).
+
+static int __bionic_open_tzdata_path(const char* path, const char* olson_id, int* data_size) {
+  int fd = TEMP_FAILURE_RETRY(open(path, OPEN_MODE));
+  if (fd == -1) {
+    XLOG(("%s: could not open \"%s\": %s\n", __FUNCTION__, path, strerror(errno)));
+    return -2; // Distinguish failure to find any data from failure to find a specific id.
+  }
+
+  // byte[12] tzdata_version  -- "tzdata2012f\0"
+  // int index_offset
+  // int data_offset
+  // int zonetab_offset
+  struct bionic_tzdata_header {
+    char tzdata_version[12];
+    int32_t index_offset;
+    int32_t data_offset;
+    int32_t zonetab_offset;
+  } header;
+  if (TEMP_FAILURE_RETRY(read(fd, &header, sizeof(header))) != sizeof(header)) {
+    fprintf(stderr, "%s: could not read header: %s\n", __FUNCTION__, strerror(errno));
+    close(fd);
+    return -1;
+  }
+
+  if (strncmp(header.tzdata_version, "tzdata", 6) != 0 || header.tzdata_version[11] != 0) {
+    fprintf(stderr, "%s: bad magic: %s\n", __FUNCTION__, header.tzdata_version);
+    close(fd);
+    return -1;
+  }
+
+#if 0
+  fprintf(stderr, "version: %s\n", header.tzdata_version);
+  fprintf(stderr, "index_offset = %d\n", ntohl(header.index_offset));
+  fprintf(stderr, "data_offset = %d\n", ntohl(header.data_offset));
+  fprintf(stderr, "zonetab_offset = %d\n", ntohl(header.zonetab_offset));
+#endif
+
+  if (TEMP_FAILURE_RETRY(lseek(fd, ntohl(header.index_offset), SEEK_SET)) == -1) {
+    fprintf(stderr, "%s: couldn't seek to index: %s\n", __FUNCTION__, strerror(errno));
+    close(fd);
+    return -1;
+  }
+
+  off_t specific_zone_offset = -1;
+
+  static const size_t NAME_LENGTH = 40;
+  unsigned char buf[NAME_LENGTH + 3 * sizeof(int32_t)];
+
+  size_t id_count = (ntohl(header.data_offset) - ntohl(header.index_offset)) / sizeof(buf);
+  for (size_t i = 0; i < id_count; ++i) {
+    if (TEMP_FAILURE_RETRY(read(fd, buf, sizeof(buf))) != (ssize_t) sizeof(buf)) {
+      break;
+    }
+
+    char this_id[NAME_LENGTH + 1];
+    memcpy(this_id, buf, NAME_LENGTH);
+    this_id[NAME_LENGTH] = '\0';
+
+    if (strcmp(this_id, olson_id) == 0) {
+      specific_zone_offset = toint(buf + NAME_LENGTH) + ntohl(header.data_offset);
+      *data_size = toint(buf + NAME_LENGTH + sizeof(int32_t));
+      break;
+    }
+  }
+
+  if (specific_zone_offset == -1) {
+    XLOG(("%s: couldn't find zone \"%s\"\n", __FUNCTION__, olson_id));
+    close(fd);
+    return -1;
+  }
+
+  if (TEMP_FAILURE_RETRY(lseek(fd, specific_zone_offset, SEEK_SET)) == -1) {
+    fprintf(stderr, "%s: could not seek to %ld: %s\n", __FUNCTION__, specific_zone_offset, strerror(errno));
+    close(fd);
+    return -1;
+  }
+
+  return fd;
+}
+
+static int __bionic_open_tzdata(const char* olson_id, int* data_size) {
+  // TODO: use $ANDROID_DATA and $ANDROID_ROOT like libcore, to support bionic on the host.
+  int fd = __bionic_open_tzdata_path("/data/misc/zoneinfo/tzdata", olson_id, data_size);
+  if (fd < 0) {
+    fd = __bionic_open_tzdata_path("/system/usr/share/zoneinfo/tzdata", olson_id, data_size);
+    if (fd == -2) {
+      // The first thing that 'recovery' does is try to format the current time. It doesn't have
+      // any tzdata available, so we must not abort here --- doing so breaks the recovery image!
+      fprintf(stderr, "%s: couldn't find any tzdata when looking for %s!\n", __FUNCTION__, olson_id);
+    }
+  }
+  return fd;
+}

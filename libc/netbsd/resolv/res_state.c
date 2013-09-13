@@ -42,15 +42,15 @@
 #define DEBUG 0
 
 #if DEBUG
-#  include <logd.h>
+#  include "libc_logging.h"
 #  include <unistd.h>  /* for gettid() */
-#  define D(...)  __libc_android_log_print(ANDROID_LOG_DEBUG,"libc", __VA_ARGS__)
+#  define D(...) __libc_format_log(ANDROID_LOG_DEBUG,"libc", __VA_ARGS__)
 #else
 #  define D(...)  do{}while(0)
 #endif
 
 static pthread_key_t   _res_key;
-static pthread_once_t  _res_once;
+static pthread_once_t  _res_once = PTHREAD_ONCE_INIT;
 
 typedef struct {
     int                  _h_errno;

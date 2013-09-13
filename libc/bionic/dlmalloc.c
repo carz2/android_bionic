@@ -16,61 +16,25 @@
 
 #include "dlmalloc.h"
 
-/* Bionic error handling declarations */
-#define PROCEED_ON_ERROR 0
-static void __bionic_heap_error(const char* msg, const char* function, void* p);
-#define CORRUPTION_ERROR_ACTION(m) \
-    __bionic_heap_error("HEAP MEMORY CORRUPTION", __FUNCTION__, NULL)
-#define USAGE_ERROR_ACTION(m,p) \
-    __bionic_heap_error("ARGUMENT IS INVALID HEAP ADDRESS", __FUNCTION__, p)
+#include "private/libc_logging.h"
 
-/*
- * Ugly inclusion of C file so that bionic specific #defines configure
- * dlmalloc.
- */
+// Send dlmalloc errors to the log.
+static void __bionic_heap_corruption_error(const char* function);
+static void __bionic_heap_usage_error(const char* function, void* address);
+#define PROCEED_ON_ERROR 0
+#define CORRUPTION_ERROR_ACTION(m) __bionic_heap_corruption_error(__FUNCTION__)
+#define USAGE_ERROR_ACTION(m,p) __bionic_heap_usage_error(__FUNCTION__, p)
+
+// Ugly inclusion of C file so that bionic specific #defines configure dlmalloc.
 #include "../upstream-dlmalloc/malloc.c"
 
-
-/* Bionic error handling definitions */
-/* Convert a pointer into hex string */
-static void __bionic_itox(char* hex, void* ptr)
-{
-    intptr_t val = (intptr_t) ptr;
-    /* Terminate with NULL */
-    hex[8] = 0;
-    int i;
-
-    for (i = 7; i >= 0; i--) {
-        int digit = val & 15;
-        hex[i] = (digit <= 9) ? digit + '0' : digit - 10 + 'a';
-        val >>= 4;
-    }
+static void __bionic_heap_corruption_error(const char* function) {
+  __libc_fatal("@@@ ABORTING: heap corruption detected by %s", function);
 }
 
-#include <private/logd.h>
-static void __bionic_heap_error(const char* msg, const char* function, void* p)
-{
-    /* We format the buffer explicitely, i.e. without using snprintf()
-     * which may use malloc() internally. Not something we can trust
-     * if we just detected a corrupted heap.
-     */
-    char buffer[256];
-    strlcpy(buffer, "@@@ ABORTING: LIBC: ", sizeof(buffer));
-    strlcat(buffer, msg, sizeof(buffer));
-    if (function != NULL) {
-        strlcat(buffer, " IN ", sizeof(buffer));
-        strlcat(buffer, function, sizeof(buffer));
-    }
-
-    if (p != NULL) {
-        char hexbuffer[9];
-        __bionic_itox(hexbuffer, p);
-        strlcat(buffer, " addr=0x", sizeof(buffer));
-        strlcat(buffer, hexbuffer, sizeof(buffer));
-    }
-
-    __libc_android_log_write(ANDROID_LOG_FATAL, "libc", buffer);
-
-    /* So that we can get a memory dump around p */
-    *((int **) 0xdeadbaad) = (int *) p;
+static void __bionic_heap_usage_error(const char* function, void* address) {
+  __libc_fatal("@@@ ABORTING: invalid address or address of corrupt block %p passed to %s",
+               address, function);
+  // So that we can get a memory dump around the specific address.
+  *((int**) 0xdeadbaad) = (int*) address;
 }

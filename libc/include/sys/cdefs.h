@@ -177,6 +177,8 @@
 #define	__unused	/* delete */
 #endif
 
+#define __pure2 __attribute__((__const__)) /* Android-added: used by FreeBSD libm */
+
 #if __GNUC_PREREQ__(3, 1)
 #define	__used		__attribute__((__used__))
 #else
@@ -313,6 +315,18 @@
 #define __purefunc
 #endif
 
+#if __GNUC_PREREQ__(3, 1)
+#define __always_inline __attribute__((__always_inline__))
+#else
+#define __always_inline
+#endif
+
+#if __GNUC_PREREQ__(3, 4)
+#define __wur __attribute__((__warn_unused_result__))
+#else
+#define __wur
+#endif
+
 /*
  * Macros for manipulating "link sets".  Link sets are arrays of pointers
  * to objects, which are gathered up by the linker.
@@ -363,11 +377,11 @@
 #define	__link_set_entry(set, idx)	(__link_set_begin(set)[idx])
 
 /*
- * Some of the recend FreeBSD sources used in Bionic need this.
+ * Some of the FreeBSD sources used in Bionic need this.
  * Originally, this is used to embed the rcs versions of each source file
  * in the generated binary. We certainly don't want this in Bionic.
  */
-#define	__FBSDID(s)	struct __hack
+#define __FBSDID(s) /* nothing */
 
 /*-
  * The following definitions are an extension of the behavior originally
@@ -502,12 +516,20 @@
 #include <android/api-level.h>
 
 #if defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE > 0 && defined(__OPTIMIZE__) && __OPTIMIZE__ > 0 && !defined(__clang__)
+#define __BIONIC_FORTIFY 1
 #define __BIONIC_FORTIFY_INLINE \
     extern inline \
     __attribute__ ((always_inline)) \
     __attribute__ ((gnu_inline)) \
     __attribute__ ((artificial))
-#define __BIONIC_FORTIFY_UNKNOWN_SIZE ((size_t) -1)
 #endif
+#define __BIONIC_FORTIFY_UNKNOWN_SIZE ((size_t) -1)
+
+/* Android-added: for FreeBSD's libm. */
+#define __weak_reference(sym,alias) \
+    __asm__(".weak " #alias); \
+    __asm__(".equ "  #alias ", " #sym)
+#define __strong_reference(sym,aliassym) \
+    extern __typeof (sym) aliassym __attribute__ ((__alias__ (#sym)))
 
 #endif /* !_SYS_CDEFS_H_ */

@@ -72,128 +72,6 @@ def find_file_from_upwards(from_path,target_file):
 
         path = os.path.dirname(path)
 
-def find_bionic_root():
-    file = find_file_from_upwards(None, "SYSCALLS.TXT")
-    if file:
-        return os.path.dirname(file)
-    else:
-        return None
-
-def find_kernel_headers():
-    """try to find the directory containing the kernel headers for this machine"""
-    status, version = commands.getstatusoutput( "uname -r" )  # get Linux kernel version
-    if status != 0:
-        D("could not execute 'uname -r' command properly")
-        return None
-
-    # get rid of the "-xenU" suffix that is found in Xen virtual machines
-    if len(version) > 5 and version[-5:] == "-xenU":
-        version = version[:-5]
-
-    path = "/usr/src/linux-headers-" + version
-    D("probing %s for kernel headers" % (path+"/include"))
-    ret = os.path.isdir( path )
-    if ret:
-        D("found kernel headers in: %s" % (path + "/include"))
-        return path
-    return None
-
-
-# parser for the SYSCALLS.TXT file
-#
-class SysCallsTxtParser:
-    def __init__(self):
-        self.syscalls = []
-        self.lineno   = 0
-
-    def E(msg):
-        print "%d: %s" % (self.lineno, msg)
-
-    def parse_line(self, line):
-        pos_lparen = line.find('(')
-        E          = self.E
-        if pos_lparen < 0:
-            E("missing left parenthesis in '%s'" % line)
-            return
-
-        pos_rparen = line.rfind(')')
-        if pos_rparen < 0 or pos_rparen <= pos_lparen:
-            E("missing or misplaced right parenthesis in '%s'" % line)
-            return
-
-        return_type = line[:pos_lparen].strip().split()
-        if len(return_type) < 2:
-            E("missing return type in '%s'" % line)
-            return
-
-        syscall_func = return_type[-1]
-        return_type  = string.join(return_type[:-1],' ')
-
-        pos_colon = syscall_func.find(':')
-        if pos_colon < 0:
-            syscall_name = syscall_func
-        else:
-            if pos_colon == 0 or pos_colon+1 >= len(syscall_func):
-                E("misplaced colon in '%s'" % line)
-                return
-            syscall_name = syscall_func[pos_colon+1:]
-            syscall_func = syscall_func[:pos_colon]
-
-        if pos_rparen > pos_lparen+1:
-            syscall_params = line[pos_lparen+1:pos_rparen].split(',')
-            params         = string.join(syscall_params,',')
-        else:
-            syscall_params = []
-            params         = "void"
-
-        number = line[pos_rparen+1:].strip()
-        if number == "stub":
-            syscall_id  = -1
-            syscall_id2 = -1
-        else:
-            try:
-                if number[0] == '#':
-                    number = number[1:].strip()
-                numbers = string.split(number,',')
-                syscall_id  = int(numbers[0])
-                syscall_id2 = syscall_id
-                if len(numbers) > 1:
-                    syscall_id2 = int(numbers[1])
-            except:
-                E("invalid syscall number in '%s'" % line)
-                return
-
-        t = { "id"     : syscall_id,
-              "id2"    : syscall_id2,
-              "name"   : syscall_name,
-              "func"   : syscall_func,
-              "params" : syscall_params,
-              "decl"   : "%-15s  %s (%s);" % (return_type, syscall_func, params) }
-
-        self.syscalls.append(t)
-
-    def parse_file(self, file_path):
-        fp = open(file_path)
-        for line in fp.xreadlines():
-            self.lineno += 1
-            line = line.strip()
-            if not line: continue
-            if line[0] == '#': continue
-            self.parse_line(line)
-
-        fp.close()
-
-
-class Output:
-    def  __init__(self,out=sys.stdout):
-        self.out = out
-
-    def write(self,msg):
-        self.out.write(msg)
-
-    def writeln(self,msg):
-        self.out.write(msg)
-        self.out.write("\n")
 
 class StringOutput:
     def __init__(self):
@@ -202,10 +80,6 @@ class StringOutput:
     def write(self,msg):
         self.line += msg
         D2("write '%s'" % msg)
-
-    def writeln(self,msg):
-        self.line += msg + '\n'
-        D2("write '%s\\n'"% msg)
 
     def get(self):
         return self.line
@@ -356,11 +230,9 @@ class BatchFileUpdater:
 
         return (adds, deletes, edits)
 
-    def _writeFile(self,dst,data=None):
+    def _writeFile(self,dst):
         if not os.path.exists(os.path.dirname(dst)):
             create_file_path(dst)
-        if data == None:
-            data = self.new_data[dst]
         f = open(dst, "w")
         f.write(self.new_data[dst])
         f.close()
@@ -376,34 +248,6 @@ class BatchFileUpdater:
 
         for dst in sorted(deletes):
             os.remove(dst)
-
-    def updateP4Files(self):
-        adds, deletes, edits = self.getChanges()
-
-        if len(adds):
-            files = string.join(sorted(adds)," ")
-            D( "%d new files will be p4 add-ed" % len(adds) )
-            for dst in adds:
-                self._writeFile(dst)
-            D2("P4 ADDS: %s" % files)
-            o = commands.getoutput( "p4 add " + files )
-            D2( o )
-
-        if len(edits):
-            files = string.join(sorted(edits)," ")
-            D( "%d files will be p4 edit-ed" % len(edits) )
-            D2("P4 EDITS: %s" % files)
-            o = commands.getoutput( "p4 edit " + files )
-            D2( o )
-            for dst in edits:
-                self._writeFile(dst)
-
-        if len(deletes):
-            files = string.join(sorted(deletes)," ")
-            D( "%d files will be p4 delete-d" % len(deletes) )
-            D2("P4 DELETES: %s" % files)
-            o = commands.getoutput( "p4 delete " + files )
-            D2( o )
 
     def updateGitFiles(self):
         adds, deletes, edits = self.getChanges()
